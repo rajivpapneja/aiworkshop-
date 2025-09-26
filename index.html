@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>IoT Practice – Device Monitoring Dashboard (CSV Import + Preview + Template)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .battery-fill { background: linear-gradient(90deg, #22c55e, #f59e0b 60%, #ef4444 85%); }
+    .shimmer { background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5), rgba(255,255,255,0)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    .toast-enter { animation: fadeIn 250ms ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .modal-backdrop { background: rgba(15,23,42,0.45); }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800">
+  <div class="max-w-7xl mx-auto p-4 sm:p-6">
+    <!-- Import Summary Toast / Banner -->
+    <div id="importToast" class="hidden toast-enter mb-4">
+      <div class="flex items-start justify-between gap-3 bg-white ring-1 ring-slate-200 rounded-2xl p-4">
+        <div>
+          <div id="importToastMsg" class="text-sm font-medium"></div>
+          <details id="importErrorsWrap" class="mt-2">
+            <summary class="text-xs text-slate-500 cursor-pointer">Show errors</summary>
+            <ul id="importErrors" class="mt-2 text-xs list-disc pl-6 text-slate-600"></ul>
+          </details>
+        </div>
+        <button id="dismissToast" class="text-xs px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">Dismiss</button>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">IoT Device Monitoring (Demo)</h1>
+        <p class="text-sm text-slate-500">Card grid, CSV import + preview, Smart Assistant alerts, and auto-refresh controls.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input id="csvFile" type="file" accept=".csv" class="hidden" />
+        <button id="uploadCsvBtn" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500">Upload CSV</button>
+        <button id="downloadTemplate" class="px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-100">CSV Template</button>
+        <button id="resetDataBtn" class="px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-100">Reset Data</button>
+        <button id="addDemoBtn" class="px-3 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-[.99] transition">+ Add Demo Devices</button>
+        <button id="refreshNow" class="px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-100">Refresh Now</button>
+        <label class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200">
+          <span class="text-sm text-slate-600">Auto-Refresh</span>
+          <select id="refreshSelect" class="bg-transparent text-sm outline-none">
+            <option value="0">Off</option>
+            <option value="5">Every 5s</option>
+            <option value="10" selected>Every 10s</option>
+            <option value="30">Every 30s</option>
+            <option value="60">Every 60s</option>
+          </select>
+        </label>
+        <span id="nextTick" class="text-xs text-slate-500 hidden"></span>
+      </div>
+    </header>
+
+    <!-- Summary Bar -->
+    <section class="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div class="bg-white rounded-2xl p-4 ring-1 ring-slate-200"><div class="text-slate-500 text-xs">Total Devices</div><div id="statTotal" class="text-2xl font-semibold">0</div></div>
+      <div class="bg-white rounded-2xl p-4 ring-1 ring-slate-200"><div class="text-slate-500 text-xs">Online</div><div id="statOnline" class="text-2xl font-semibold">0</div></div>
+      <div class="bg-white rounded-2xl p-4 ring-1 ring-slate-200"><div class="text-slate-500 text-xs">Offline</div><div id="statOffline" class="text-2xl font-semibold">0</div></div>
+      <div class="bg-white rounded-2xl p-4 ring-1 ring-slate-200"><div class="text-slate-500 text-xs">Alerts</div><div id="statAlerts" class="text-2xl font-semibold">0</div></div>
+      <div class="bg-white rounded-2xl p-4 ring-1 ring-slate-200"><div class="text-slate-500 text-xs">Imported Source</div><div id="statSource" class="text-sm font-medium">Synthetic</div></div>
+    </section>
+
+    <!-- Main Content -->
+    <section class="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Devices Grid -->
+      <div class="lg:col-span-2">
+        <div id="devicesGrid" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+      </div>
+
+      <!-- Alerts Panel -->
+      <aside class="bg-white rounded-2xl ring-1 ring-slate-200 p-4 flex flex-col h-full">
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-semibold">Alerts</h2>
+          <div class="flex items-center gap-2">
+            <button id="clearAlerts" class="text-xs px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">Clear</button>
+            <label class="text-xs text-slate-500 flex items-center gap-1"><input id="pauseAlerts" type="checkbox" class="rounded border-slate-300" />Pause</label>
+          </div>
+        </div>
+        <div id="alertsList" class="mt-3 space-y-3 overflow-auto" style="max-height: 70vh;">
+          <div class="text-sm text-slate-400">No alerts yet. Smart Assistant will explain anomalies with short rationales.</div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- Preview Modal -->
+    <div id="previewModal" class="hidden fixed inset-0 z-50 grid place-items-center">
+      <div class="modal-backdrop absolute inset-0"></div>
+      <div class="relative bg-white rounded-2xl shadow-xl ring-1 ring-slate-200 w-[95vw] max-w-5xl max-h-[85vh] overflow-hidden">
+        <div class="flex items-center justify-between p-4 border-b border-slate-200">
+          <h3 class="text-lg font-semibold">CSV Import Preview</h3>
+          <button id="closePreview" class="text-xs px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">Close</button>
+        </div>
+        <div class="p-4 overflow-auto">
+          <div id="previewSummary" class="text-sm mb-3"></div>
+          <div class="overflow-auto border rounded-xl">
+            <table class="min-w-full text-sm">
+              <thead class="bg-slate-50 text-slate-600">
+                <tr id="previewHeader"></tr>
+              </thead>
+              <tbody id="previewBody" class="divide-y"></tbody>
+            </table>
+          </div>
+          <details id="previewErrorsWrap" class="mt-4">
+            <summary class="text-xs text-slate-500 cursor-pointer">Show errors</summary>
+            <ul id="previewErrors" class="mt-2 text-xs list-disc pl-6 text-slate-600"></ul>
+          </details>
+        </div>
+        <div class="p-4 border-t border-slate-200 flex items-center justify-between">
+          <div class="text-xs text-slate-500">Only valid rows will be imported.</div>
+          <div class="flex items-center gap-2">
+            <button id="cancelImport" class="px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-100">Cancel</button>
+            <button id="confirmImport" class="px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-500">Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-8 text-xs text-slate-400">
+      <p>Smart Assistant uses simple heuristics and embeds a short rationale in each alert. CSV parsing is entirely in-browser via FileReader.</p>
+    </footer>
+  </div>
+
+  <script>
+    /********************** Data Model **********************/
+    const devices = [];
+    const alerts = [];
+
+    const TYPES = { TEMP: 'Temperature Sensor', MOTION: 'Motion Detector', LIGHT: 'Smart Light', HUMID: 'Humidity Sensor', PDU: 'Smart Plug/PDU', GW: 'Gateway' };
+    const CSV_TYPES = ['temperature_sensor','motion_detector','smart_light','gateway'];
+    const SEVERITY = { INFO: 'info', WARN: 'warning', CRIT: 'critical' };
+
+    let refreshTimer = null, nextTickCountdown = 0, pausedAlerts = false, dataSource = 'Synthetic';
+
+    /********************** Utilities **********************/
+    const rand = (min, max) => Math.random() * (max - min) + min;
+    const randint = (min, max) => Math.floor(rand(min, max + 1));
+    const now = () => new Date();
+    const shortTime = (d) => d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    const uid = () => Math.random().toString(36).slice(2, 10);
+    const fmtPct = (n) => `${Math.max(0, Math.min(100, Math.round(n)))}%`;
+    const clamp = (x,min,max)=>Math.max(min,Math.min(max,x));
+    function timeAgo(ts){ const diff = Math.max(0, (now() - ts) / 1000); if (diff<60) return `${Math.floor(diff)}s ago`; if (diff<3600) return `${Math.floor(diff/60)}m ago`; return `${Math.floor(diff/3600)}h ago`; }
+    function addAlert(device, severity, text){ if (pausedAlerts) return; alerts.unshift({ id: uid(), ts: now(), deviceId: device?.id ?? null, severity, text }); if (alerts.length>300) alerts.pop(); renderAlerts(); updateStats(); }
+
+    /**************** Demo Device Generators ****************/
+    function createDevice(type){ const base = { id: uid(), name: `${type.split(' ')[0]}-${randint(1000,9999)}`, type, powerOn: true, online: true, lastSeen: now(), battery: randint(55,100), rebooting: false, history: { statusFlips: [], motions: 0, lastReboot: null }, firmware: 'v1.0.0', expectedHeartbeatSec: 30 };
+      switch(type){ case TYPES.TEMP: base.metrics = { temperatureC: rand(20,35), cpuC: rand(35,65), latencyMs: randint(20,120) }; break;
+        case TYPES.MOTION: base.metrics = { motionActive: Math.random()<0.1, latencyMs: randint(30,150), motionEventsMin: randint(0,5) }; break;
+        case TYPES.LIGHT: base.metrics = { brightness: randint(0,100), watts: rand(2,9), latencyMs: randint(10,120), lux: randint(20,200) }; break;
+        case TYPES.HUMID: base.metrics = { humidity: rand(35,65), temperatureC: rand(18,33), latencyMs: randint(25,130) }; break;
+        case TYPES.PDU: base.metrics = { amps: rand(0.2,2.5), volts: 230, watts: rand(10,400), latencyMs: randint(20,140), messagesMin: randint(5,30) }; break;
+        case TYPES.GW: base.metrics = { messagesMin: randint(10,50), latencyMs: randint(15,120) }; break; }
+      return base; }
+    function addDemoDevices(){ const mix = [TYPES.TEMP, TYPES.MOTION, TYPES.LIGHT, TYPES.HUMID, TYPES.PDU, TYPES.GW]; for(let i=0;i<6;i++){ devices.push(createDevice(mix[i % mix.length])); } dataSource='Synthetic'; renderDevices(); updateStats(); addAlert(null, SEVERITY.INFO, `Added 6 demo devices at ${shortTime(now())} (demo).`); }
+
+    /**************** Simulation & Refresh ****************/
+    function simulateDeviceUpdate(d){ if (d.powerOn && !d.rebooting) d.battery = Math.max(0, d.battery - rand(0.02, 0.25)); if (!d.rebooting && Math.random()<0.02){ d.online = !d.online; d.history.statusFlips.push(now()); if (d.history.statusFlips.length>20) d.history.statusFlips.shift(); } if (!d.powerOn){ d.online = false; return; } if (d.rebooting){ if (!d.history.lastReboot) d.history.lastReboot = now(); const elapsed = now()-d.history.lastReboot; if (elapsed>1500){ d.rebooting=false; d.online=true; d.history.lastReboot=null; addAlert(d, SEVERITY.INFO, `Device rebooted successfully. Rationale: Manual reboot completed; heartbeat restored.`); } return; } switch(d.type){ case TYPES.TEMP: d.metrics.temperatureC = clamp(d.metrics.temperatureC + rand(-0.7,1.2), -10, 110); d.metrics.cpuC = clamp(d.metrics.cpuC + rand(-1.0,1.5), 10, 100); d.metrics.latencyMs = Math.max(5, d.metrics.latencyMs + rand(-10,10)); break; case TYPES.MOTION: const active = Math.random()<0.12; d.metrics.motionActive = active || (d.metrics.motionActive && Math.random()<0.4); if (d.metrics.motionActive) d.history.motions++; d.metrics.motionEventsMin = Math.max(0, (d.metrics.motionEventsMin ?? 0) + (d.metrics.motionActive?1:0)); d.metrics.latencyMs = Math.max(5, d.metrics.latencyMs + rand(-10,10)); break; case TYPES.LIGHT: if (d.online) d.metrics.brightness = clamp(d.metrics.brightness + randint(-5,5), 0, 100); else d.metrics.brightness = Math.max(0, d.metrics.brightness - randint(1,7)); d.metrics.watts = Math.max(0, d.metrics.watts + rand(-1,1)); d.metrics.lux = Math.max(0, (d.metrics.lux ?? 0) + randint(-5,5)); d.metrics.latencyMs = Math.max(5, d.metrics.latencyMs + rand(-10,10)); break; case TYPES.HUMID: d.metrics.humidity = clamp(d.metrics.humidity + rand(-2.5,2.5), 0, 100); d.metrics.temperatureC = clamp(d.metrics.temperatureC + rand(-0.6,0.9), -10, 60); d.metrics.latencyMs = Math.max(5, d.metrics.latencyMs + rand(-10,10)); break; case TYPES.PDU: d.metrics.amps = Math.max(0, d.metrics.amps + rand(-0.2,0.2)); d.metrics.watts = Math.max(0, d.metrics.watts + rand(-15,15)); d.metrics.messagesMin = Math.max(0, (d.metrics.messagesMin ?? 0) + randint(-2,2)); d.metrics.latencyMs = Math.max(5, d.metrics.latencyMs + rand(-10,10)); break; case TYPES.GW: d.metrics.messagesMin = Math.max(0, (d.metrics.messagesMin ?? 0) + randint(-3,3)); d.metrics.latencyMs = Math.max(5, (d.metrics.latencyMs ?? 20) + rand(-10,10)); break; } d.lastSeen = now(); }
+
+    /**************** Smart Assistant – Heuristic Alerts ****************/
+    function smartAssistantAnalyze(d){ const ideas = []; const staleSeconds = (now() - d.lastSeen)/1000; const hb = d.expectedHeartbeatSec ?? 30; if (!d.online || staleSeconds > Math.max(120, hb*3)){ ideas.push({ severity: SEVERITY.WARN, text: `Device offline or stale. Rationale: Last heartbeat ${timeAgo(d.lastSeen)}; exceeds ${Math.max(120,hb*3)}s threshold.` }); } if (d.battery<10){ ideas.push({ severity: SEVERITY.CRIT, text: `Battery critical (${fmtPct(d.battery)}). Rationale: <10% capacity risks shutdown.` }); } else if (d.battery<20){ ideas.push({ severity: SEVERITY.WARN, text: `Battery low (${fmtPct(d.battery)}). Rationale: <20% threshold; schedule recharge.` }); } if (d.metrics?.latencyMs && d.metrics.latencyMs>300){ ideas.push({ severity: SEVERITY.WARN, text: `High network latency (${Math.round(d.metrics.latencyMs)} ms). Rationale: >300 ms exceeds typical limit.` }); } if (d.type===TYPES.TEMP){ const t=d.metrics.temperatureC??0, cpu=d.metrics.cpuC??0; if (t>80){ ideas.push({ severity: SEVERITY.CRIT, text: `Over-temperature (${t.toFixed(1)}°C). Rationale: >80°C risk.` }); } else if (t>60){ ideas.push({ severity: SEVERITY.WARN, text: `Temperature elevated (${t.toFixed(1)}°C). Rationale: >60°C.` }); } if (cpu>85){ ideas.push({ severity: SEVERITY.WARN, text: `High CPU temp (${cpu.toFixed(1)}°C). Rationale: potential throttling.` }); } } if (d.type===TYPES.MOTION){ const ev=d.metrics.motionEventsMin ?? 0; if (ev>20){ ideas.push({ severity: SEVERITY.WARN, text: `High motion rate (${ev}/min). Rationale: exceeds normal baseline.` }); } if (d.history.motions>=3 && d.metrics.motionActive){ ideas.push({ severity: SEVERITY.WARN, text: `Persistent motion. Rationale: 3+ active cycles; chatter/intrusion suspected.` }); } } if (d.type===TYPES.LIGHT){ if (!d.online && ((d.metrics.watts??0)>0.2 || (d.metrics.brightness??0)>0)){ ideas.push({ severity: SEVERITY.WARN, text: `Power telemetry mismatch. Rationale: Offline while draw/brightness > 0.` }); } if ((d.metrics.brightness??0)>95 && (d.metrics.watts??0)>8){ ideas.push({ severity: SEVERITY.INFO, text: `Peak draw observed. Rationale: Brightness ≈100% with high wattage; optimize usage.` }); } if ((d.metrics.lux??0)>300){ ideas.push({ severity: SEVERITY.INFO, text: `High ambient lux (${d.metrics.lux}). Rationale: consider dimming.` }); } } if (d.type===TYPES.GW){ const mps=d.metrics.messagesMin ?? 0; if (mps<1 && d.online){ ideas.push({ severity: SEVERITY.WARN, text: `Gateway idle. Rationale: ${mps}/min msgs while online; routing issue?` }); } } const flipsLast5m = d.history.statusFlips.filter(t => (now()-t)/1000 < 300).length; if (flipsLast5m>=3){ ideas.push({ severity: SEVERITY.WARN, text: `Connectivity flapping. Rationale: ${flipsLast5m} state changes in 5m.` }); } return ideas; }
+    function runAIAlerts(d){ smartAssistantAnalyze(d).forEach(a => addAlert(d, a.severity, `[${d.name}] ${a.text}`)); }
+
+    /**************** Rendering – Devices ****************/
+    function renderDevices(){ const grid = document.getElementById('devicesGrid'); grid.innerHTML = ''; devices.forEach(d => { const card = document.createElement('div'); card.className = 'bg-white rounded-2xl ring-1 ring-slate-200 p-4 flex flex-col gap-3'; const statusDot = d.rebooting ? '<span class="inline-block w-2 h-2 rounded-full bg-sky-500 animate-pulse"></span>' : (d.online ? '<span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>' : '<span class="inline-block w-2 h-2 rounded-full bg-rose-500"></span>'); const header = `<div class=\"flex items-start justify-between gap-3\"><div><div class=\"flex items-center gap-2\">${statusDot}<h3 class=\"font-semibold\">${d.name}</h3></div><div class=\"mt-1\"><span class=\"text-[10px] px-2 py-0.5 rounded-full bg-slate-100 ring-1 ring-slate-200\">${d.type}${d.firmware?` • ${d.firmware}`:''}</span></div>${d.location||d.group?`<div class=\"text-xs text-slate-500\">${[d.location,d.group].filter(Boolean).join(' • ')}</div>`:''}</div><div class=\"text-right text-xs text-slate-500\"><div>Last seen: <span class=\"${d.rebooting ? 'shimmer' : ''}\">${timeAgo(d.lastSeen)}</span></div><div>Latency: ${d.metrics?.latencyMs ? Math.round(d.metrics.latencyMs) : '—'} ms</div></div></div>`; let metricsHtml=''; if (d.type===TYPES.TEMP){ metricsHtml = `<div class=\"grid grid-cols-3 gap-2 text-sm\"><div class=\"p-2 rounded-lg bg-slate-50\">Temp<br><span class=\"font-semibold\">${(d.metrics.temperatureC??0).toFixed(1)}°C</span></div><div class=\"p-2 rounded-lg bg-slate-50\">CPU<br><span class=\"font-semibold\">${(d.metrics.cpuC??0).toFixed(1)}°C</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Battery<br><span class=\"font-semibold\">${fmtPct(d.battery)}</span></div></div>`; } else if (d.type===TYPES.MOTION){ metricsHtml = `<div class=\"grid grid-cols-3 gap-2 text-sm\"><div class=\"p-2 rounded-lg bg-slate-50\">Motion<br><span class=\"font-semibold\">${d.metrics.motionActive ? 'ACTIVE' : '—'}</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Rate<br><span class=\"font-semibold\">${d.metrics.motionEventsMin??0}/min</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Battery<br><span class=\"font-semibold\">${fmtPct(d.battery)}</span></div></div>`; } else if (d.type===TYPES.LIGHT){ metricsHtml = `<div class=\"grid grid-cols-3 gap-2 text-sm\"><div class=\"p-2 rounded-lg bg-slate-50\">Bright<br><span class=\"font-semibold\">${d.metrics.brightness??0}%</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Watts<br><span class=\"font-semibold\">${(d.metrics.watts??0).toFixed(1)}W</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Lux<br><span class=\"font-semibold\">${d.metrics.lux??0}</span></div></div>`; } else if (d.type===TYPES.HUMID){ metricsHtml = `<div class=\"grid grid-cols-3 gap-2 text-sm\"><div class=\"p-2 rounded-lg bg-slate-50\">Humid<br><span class=\"font-semibold\">${(d.metrics.humidity??0).toFixed(1)}%</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Temp<br><span class=\"font-semibold\">${(d.metrics.temperatureC??0).toFixed(1)}°C</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Battery<br><span class=\"font-semibold\">${fmtPct(d.battery)}</span></div></div>`; } else if (d.type===TYPES.PDU || d.type===TYPES.GW){ metricsHtml = `<div class=\"grid grid-cols-3 gap-2 text-sm\"><div class=\"p-2 rounded-lg bg-slate-50\">Msgs/min<br><span class=\"font-semibold\">${d.metrics.messagesMin??0}</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Watts<br><span class=\"font-semibold\">${(d.metrics.watts??0).toFixed(0)}W</span></div><div class=\"p-2 rounded-lg bg-slate-50\">Battery<br><span class=\"font-semibold\">${fmtPct(d.battery)}</span></div></div>`; } const batteryPct = Math.round(d.battery); const batteryColor = batteryPct<10? 'bg-rose-500' : batteryPct<20? 'bg-amber-500' : 'battery-fill'; const batteryBar = `<div class=\"mt-1 h-2 w-full rounded-full bg-slate-100 ring-1 ring-slate-200 overflow-hidden\"><div class=\"h-full ${batteryColor}\" style=\"width:${batteryPct}%\"></div></div>`; const ctrlHtml = `<div class=\"flex items-center justify-between gap-2\"><div class=\"flex items-center gap-2\"><label class=\"inline-flex items-center gap-2 text-sm\"><input data-id=\"${d.id}\" class=\"powerToggle rounded border-slate-300\" type=\"checkbox\" ${d.powerOn ? 'checked' : ''} />Power</label><button data-id=\"${d.id}\" class=\"rebootBtn px-2 py-1 text-sm rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40\" ${d.rebooting || !d.powerOn ? 'disabled' : ''}>Reboot</button></div><div class=\"text-xs text-slate-500\">Status: <span class=\"font-medium\">${d.rebooting ? 'Rebooting…' : (d.online ? 'Online' : 'Offline')}</span></div></div>`; card.innerHTML = header + metricsHtml + batteryBar + ctrlHtml; grid.appendChild(card); }); document.querySelectorAll('.powerToggle').forEach(el => { el.addEventListener('change', (e) => { const d = devices.find(x => x.id === e.target.dataset.id); if (!d) return; d.powerOn = e.target.checked; if (!d.powerOn){ d.online = false; addAlert(d, SEVERITY.INFO, `[${d.name}] Power off requested. Rationale: Manual toggle; device intentionally taken offline.`); } else { d.online = true; d.lastSeen = now(); addAlert(d, SEVERITY.INFO, `[${d.name}] Power on requested. Rationale: Manual toggle; heartbeats expected to resume.`); } renderDevices(); updateStats(); }); }); document.querySelectorAll('.rebootBtn').forEach(btn => { btn.addEventListener('click', (e) => { const d = devices.find(x => x.id === e.target.dataset.id); if (!d || !d.powerOn || d.rebooting) return; d.rebooting = true; d.online = false; d.history.lastReboot = null; addAlert(d, SEVERITY.INFO, `[${d.name}] Reboot initiated. Rationale: Manual reboot command issued by operator.`); renderDevices(); }); }); }
+
+    /**************** Rendering – Alerts ****************/
+    function renderAlerts(){ const list = document.getElementById('alertsList'); list.innerHTML = ''; if (alerts.length===0){ list.innerHTML = '<div class="text-sm text-slate-400">No alerts.</div>'; return; } alerts.forEach(a=>{ const pill = a.severity===SEVERITY.CRIT ? 'bg-rose-100 text-rose-700 ring-rose-200' : a.severity===SEVERITY.WARN ? 'bg-amber-100 text-amber-700 ring-amber-200' : 'bg-sky-100 text-sky-700 ring-sky-200'; const row = document.createElement('div'); row.className = `p-3 rounded-xl ring-1 ${pill}`; row.innerHTML = `<div class="text-xs flex items-center justify-between"><span class="uppercase tracking-wide">${a.severity}</span><span class="text-slate-500">${shortTime(a.ts)}</span></div><div class="mt-1 text-sm">${a.text}</div>`; list.appendChild(row); }); updateStats(); }
+
+    /**************** Rendering – Stats ****************/
+    function updateStats(){ const total = devices.length; const online = devices.filter(d=>d.online).length; document.getElementById('statTotal').textContent = total; document.getElementById('statOnline').textContent = online; document.getElementById('statOffline').textContent = total - online; document.getElementById('statAlerts').textContent = alerts.length; document.getElementById('statSource').textContent = dataSource; }
+
+    /**************** Auto-Refresh ****************/
+    function setAutoRefresh(seconds){ const nextTick = document.getElementById('nextTick'); if (refreshTimer){ clearInterval(refreshTimer); refreshTimer = null; } nextTick.classList.add('hidden'); if (!seconds || seconds<=0) return; nextTickCountdown = seconds; nextTick.textContent = `Next update in ${nextTickCountdown}s`; nextTick.classList.remove('hidden'); refreshTimer = setInterval(() => { nextTickCountdown--; if (nextTickCountdown<=0){ doRefreshCycle(); nextTickCountdown = seconds; } nextTick.textContent = `Next update in ${nextTickCountdown}s`; }, 1000); }
+    function doRefreshCycle(){ devices.forEach(d => { simulateDeviceUpdate(d); runAIAlerts(d); }); renderDevices(); updateStats(); }
+
+    /**************** CSV Upload (FileReader) with Preview ****************/
+    const csvInput = document.getElementById('csvFile');
+    document.getElementById('uploadCsvBtn').addEventListener('click', ()=> csvInput.click());
+    csvInput.addEventListener('change', onCsvFile);
+
+    // Preview state
+    let previewParsed = null; // { valid: [], errors: [], header: [...] }
+
+    function onCsvFile(e){ const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { previewParsed = parseCsvForPreview(reader.result); openPreview(previewParsed); }; reader.readAsText(file); e.target.value = ''; }
+
+    function parseCsvForPreview(text){ const { rows, error } = csvToRows(text); if (error) return { valid: [], errors: [`Parse error: ${error}`], header: [] };
+      if (!rows.length) return { valid: [], errors: ['No rows found.'], header: [] };
+      const header = rows[0].map(h=>h.trim()); const lower = header.map(h=>h.toLowerCase());
+      const req = ['device_name','type','status','battery','last_seen','firmware','expected_heartbeat_sec'];
+      const idx = Object.fromEntries(lower.map((h,i)=>[h,i]));
+      const miss = req.filter(h=> idx[h]===undefined);
+      if (miss.length) return { valid: [], errors: [`Missing required column(s): ${miss.join(', ')}`], header };
+      const valids=[], errs=[]; for (let r=1;r<rows.length;r++){ const row=rows[r]; if (row.length===1 && row[0]==='') continue; const get=(name)=> row[idx[name]]?.trim?.(); const rowErrors=[]; const device_name=get('device_name'); if(!device_name) rowErrors.push('device_name missing'); const typeRaw=(get('type')||'').toLowerCase(); if (!CSV_TYPES.includes(typeRaw)) rowErrors.push(`invalid type '${typeRaw}'`); const statusRaw=(get('status')||'').toLowerCase(); if(!['online','offline'].includes(statusRaw)) rowErrors.push(`invalid status '${statusRaw}'`); const bStr=get('battery'); const battery=Number(bStr); if(!isFinite(battery)) rowErrors.push('battery not numeric'); else if(battery<0||battery>100) rowErrors.push('battery out of 0–100'); const lastSeenStr=get('last_seen'); const lastSeen=parseDateFlexible(lastSeenStr); if(!lastSeen) rowErrors.push('last_seen invalid format'); const firmware=get('firmware'); if(!firmware) rowErrors.push('firmware missing'); const hbStr=get('expected_heartbeat_sec'); const expectedHeartbeatSec=Number(hbStr); if(!isFinite(expectedHeartbeatSec)) rowErrors.push('expected_heartbeat_sec not numeric'); const temperature_c=numOrNull(get('temperature_c')); const motion_events_min=numOrNull(get('motion_events_min')); const lux=numOrNull(get('lux')); const power_w=numOrNull(get('power_w')); const messages_min=numOrNull(get('messages_min')); const location=get('location')||null; const group=get('group')||null; if(rowErrors.length){ errs.push(`Row ${r+1}: ${rowErrors.join('; ')}`); continue; } let type; switch(typeRaw){ case 'temperature_sensor': type=TYPES.TEMP; break; case 'motion_detector': type=TYPES.MOTION; break; case 'smart_light': type=TYPES.LIGHT; break; case 'gateway': type=TYPES.GW; break; } const dev={ id: uid(), name: device_name, type, powerOn: true, online: statusRaw==='online', lastSeen, battery, rebooting:false, history:{ statusFlips:[], motions:0, lastReboot:null }, firmware, expectedHeartbeatSec, location, group, metrics:{} };
+        if(type===TYPES.TEMP){ dev.metrics.temperatureC = temperature_c ?? rand(20,30); dev.metrics.cpuC = rand(35,65); dev.metrics.latencyMs = randint(20,120); }
+        else if(type===TYPES.MOTION){ dev.metrics.motionActive = (motion_events_min??0) > 0; dev.metrics.motionEventsMin = motion_events_min ?? 0; dev.metrics.latencyMs = randint(25,150); }
+        else if(type===TYPES.LIGHT){ dev.metrics.brightness = clamp(lux ? Math.min(100, Math.round(lux/2)) : randint(10,90), 0, 100); dev.metrics.watts = power_w ?? rand(1,12); dev.metrics.lux = lux ?? randint(20,200); dev.metrics.latencyMs = randint(10,120); }
+        else if(type===TYPES.GW){ dev.metrics.messagesMin = messages_min ?? randint(5,30); dev.metrics.latencyMs = randint(15,120); }
+        valids.push(dev); }
+      return { valid: valids, errors: errs, header };
+    }
+
+    function openPreview(state){ const modal=document.getElementById('previewModal'); const hrow=document.getElementById('previewHeader'); const body=document.getElementById('previewBody'); const sum=document.getElementById('previewSummary'); const errWrap=document.getElementById('previewErrorsWrap'); const errList=document.getElementById('previewErrors'); hrow.innerHTML=''; body.innerHTML=''; errList.innerHTML=''; if(state.header && state.header.length){ state.header.forEach(h=>{ const th=document.createElement('th'); th.className='px-3 py-2 text-left font-semibold'; th.textContent=h; hrow.appendChild(th); }); } const maxRows = Math.min(50, state.valid.length + (state.errors.length?1:0)); // show up to 50 lines
+      // For preview table we regenerate from original CSV rows? We only show valid reconstructed rows
+      state.valid.slice(0, maxRows).forEach(dev=>{ const tr=document.createElement('tr'); tr.className='hover:bg-slate-50'; tr.innerHTML = `<td class='px-3 py-2'>${dev.name}</td><td class='px-3 py-2'>${dev.type}</td><td class='px-3 py-2'>${dev.online?'online':'offline'}</td><td class='px-3 py-2'>${Math.round(dev.battery)}</td><td class='px-3 py-2'>${dev.lastSeen.toISOString()}</td><td class='px-3 py-2'>${dev.firmware}</td><td class='px-3 py-2'>${dev.expectedHeartbeatSec}</td>`; body.appendChild(tr); });
+      sum.textContent = `Ready to import ${state.valid.length} device(s). Skipping ${state.errors.length} invalid row(s).`;
+      if (state.errors && state.errors.length){ errWrap.open = false; state.errors.forEach(e=>{ const li=document.createElement('li'); li.textContent=e; errList.appendChild(li); }); } else { errWrap.open=false; errWrap.classList.add('hidden'); }
+      modal.classList.remove('hidden');
+    }
+    document.getElementById('closePreview').addEventListener('click', ()=> document.getElementById('previewModal').classList.add('hidden'));
+    document.getElementById('cancelImport').addEventListener('click', ()=> document.getElementById('previewModal').classList.add('hidden'));
+    document.getElementById('confirmImport').addEventListener('click', ()=>{ if (!previewParsed) return; if (!previewParsed.valid.length){ showImportToast(0,0, previewParsed.errors.length? previewParsed.errors : ['All rows invalid; data unchanged.']); document.getElementById('previewModal').classList.add('hidden'); return; } devices.length = 0; previewParsed.valid.forEach(d=>devices.push(d)); dataSource='CSV'; renderDevices(); updateStats(); devices.forEach(d=> runAIAlerts(d)); showImportToast(previewParsed.valid.length, previewParsed.errors.length, previewParsed.errors); document.getElementById('previewModal').classList.add('hidden'); });
+
+    // Simple CSV → rows parser
+    function csvToRows(text){ try{ const rows=[]; let cur='', row=[]; let inQ=false; for (let i=0;i<text.length;i++){ const c=text[i]; const n=text[i+1]; if (inQ){ if (c==='"' && n==='"'){ cur+='"'; i++; } else if (c==='"'){ inQ=false; } else { cur+=c; } } else { if (c==='"'){ inQ=true; } else if (c===','){ row.push(cur); cur=''; } else if (c==='\n'){ row.push(cur); rows.push(row); row=[]; cur=''; } else if (c==='\r'){ } else { cur+=c; } } } if (cur!=='' || row.length){ row.push(cur); rows.push(row); } return { rows }; } catch(e){ return { rows: [], error: e.message }; } }
+
+    function numOrNull(v){ if (v===undefined || v===null || v==='') return null; const n = Number(v); return isFinite(n)? n : null; }
+    function parseDateFlexible(s){ if (!s) return null; const iso = Date.parse(s); if (!isNaN(iso)) return new Date(iso); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/); if (m){ const [_,Y,Mo,D,h,mi,ss] = m; const dt = new Date(Number(Y), Number(Mo)-1, Number(D), Number(h), Number(mi), Number(ss||'0')); return isNaN(dt.getTime())? null : dt; } return null; }
+
+    function showImportToast(imported, skipped, errors){ const t = document.getElementById('importToast'); const msg = document.getElementById('importToastMsg'); const list = document.getElementById('importErrors'); const wrap = document.getElementById('importErrorsWrap'); msg.textContent = `Imported ${imported} device${imported!==1?'s':''}, skipped ${skipped} invalid row${skipped!==1?'s':''}.`; list.innerHTML = ''; if (errors && errors.length){ wrap.classList.remove('hidden'); wrap.open = false; errors.forEach(e=>{ const li=document.createElement('li'); li.textContent=e; list.appendChild(li); }); } else { wrap.classList.add('hidden'); } t.classList.remove('hidden'); }
+    document.getElementById('dismissToast').addEventListener('click', ()=> document.getElementById('importToast').classList.add('hidden'));
+
+    /**************** Header Controls ****************/
+    document.getElementById('addDemoBtn').addEventListener('click', addDemoDevices);
+    document.getElementById('refreshNow').addEventListener('click', () => { doRefreshCycle(); const selVal = +document.getElementById('refreshSelect').value; if (selVal>0) setAutoRefresh(selVal); });
+    document.getElementById('refreshSelect').addEventListener('change', (e) => setAutoRefresh(+e.target.value));
+    document.getElementById('clearAlerts').addEventListener('click', () => { alerts.length = 0; renderAlerts(); });
+    document.getElementById('pauseAlerts').addEventListener('change', (e) => { pausedAlerts = e.target.checked; });
+    document.getElementById('resetDataBtn').addEventListener('click', ()=>{ devices.length = 0; alerts.length = 0; dataSource='Synthetic'; addDemoDevices(); renderDevices(); renderAlerts(); updateStats(); showImportToast(0,0,["Reset complete: synthetic dataset restored."]); });
+
+    // CSV template download
+    document.getElementById('downloadTemplate').addEventListener('click', ()=>{
+      const csv = `device_name,type,status,battery,last_seen,firmware,expected_heartbeat_sec,temperature_c,motion_events_min,lux,power_w,messages_min,location,group\n`+
+      `T-Alpha,temperature_sensor,online,78,2025-09-24 09:45,v1.2.3,30,24.6,,,,12,Kitchen,Floor-1\n`+
+      `M-Bravo,motion_detector,online,56,2025-09-24T09:44:00,v2.0.1,30,,3,,,8,BackDoor,Perimeter\n`+
+      `L-Charlie,smart_light,offline,21,2025-09-24 09:40,v1.8.0,60,,,120,7.5,2,Showroom,Lighting\n`+
+      `G-Delta,gateway,online,92,2025-09-24 09:46,v3.1.0,15,,,,22,ControlRoom,Core\n`;
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='iot_devices_template.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    });
+
+    /**************** Bootstrap ****************/
+    addDemoDevices(); setAutoRefresh(+document.getElementById('refreshSelect').value);
+  </script>
+</body>
+</html>
